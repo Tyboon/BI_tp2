@@ -1,0 +1,131 @@
+IMPLEMENTATION 
+
+1) Pour les produits : 
+
+select regexp_substr(designation, '[^.]*', 1, 1), regexp_substr(designation, '[^.]*', 1, 3), regexp_substr(designation, '[^.]*', 1, 5)
+from produit; 
+
+Pour l'adresse : 
+
+select regexp_substr(adresse, '[^,]*', 1, 3), regexp_substr(adresse, '[^,]*', 1, 5), regexp_substr(adresse, '[^,]*', 1, 7)
+from client; 
+
+Pour l'age :
+
+select 
+Case 
+when floor(months_between(SYSDATE, date_nais)/12) <30 then '<30'
+when floor(months_between(SYSDATE, date_nais)/12) <46 then '30-45'
+when floor(months_between(SYSDATE, date_nais)/12) <61 then '46-60'
+else '>60'
+end
+from client;
+
+Requetes SQL Creation Vues :
+
+Create materialized view produit_vm
+Build immediate
+Refresh force
+Enable query rewrite as
+select num, regexp_substr(designation, '[^.]*', 1, 1) as produit, regexp_substr(designation, '[^.]*', 1, 3) as categorie, regexp_substr(designation, '[^.]*', 1, 5) as sous_categorie
+from produit; 
+
+Create materialized view client_vm
+Build immediate
+Refresh force as
+select num, 
+sexe,
+floor(months_between(SYSDATE, date_nais)/12) as age,
+Case 
+when floor(months_between(SYSDATE, date_nais)/12) <30 then '<30'
+when floor(months_between(SYSDATE, date_nais)/12) <46 then '30-45'
+when floor(months_between(SYSDATE, date_nais)/12) <61 then '46-60'
+else '>60'
+end as tranche_age
+from client; 
+
+Create materialized view lieu_vm
+Build immediate
+Refresh force as 
+select  distinct regexp_substr(adresse, '[^,]*', 1, 3) as code_postal, regexp_substr(adresse, '[^,]*', 1, 5) as ville , regexp_substr(adresse, '[^,]*', 1, 7) as pays
+from client; 
+
+Create materialized view temps_vm
+Build immediate
+Refresh force as
+select distinct date_etabli, extract(day FROM date_etabli) as jour , extract(month FROM date_etabli) as mois , extract(year FROM date_etabli) as annee, to_char( date_etabli,'IW') as semaine from facture;
+
+Create materialized view vente_vm
+Build immediate
+Refresh force as
+select produits.pid as num_produit, client.num as num_client, regexp_substr(adresse, '[^,]*', 1, 3) as code_postal, regexp_substr(adresse, '[^,]*', 1, 5) as code_postal, facture.date_etabli as date_vente, facture.num as num_facture, prix_date.prix as prix_unitaire, ligne_facture.qte as quantite, ligne_facture.qte * prix_date.prix as prix_vente
+from produits
+join ligne_facture on produits.pid = ligne_facture.produit
+join facture on ligne_facture.facture = facture.num
+join client on facture.client = client.num
+join prix_date on prix_date.produit = produits.pid;
+
+Requête creation clé primaires / clé étrangères :
+
+Clé primaire pour produit déjà généré par oracle
+
+Pour client :
+
+ALTER materialized view Client_vm
+ADD CONSTRAINT pk_view_client_ID PRIMARY KEY (num);
+
+Pour lieu :
+
+ALTER materialized view lieu_vm
+ADD CONSTRAINT pk_view_lieu_ID PRIMARY KEY (code_postal, ville);
+
+Pour temps : 
+
+ALTER materialized view temps_vm
+ADD CONSTRAINT pk_view_temps_ID PRIMARY KEY (date_etabli);
+ 
+Pour produit : 
+
+ALTER materialized view vente_vm
+ADD CONSTRAINT pk_view_vente_ID PRIMARY KEY (num_produit, num_facture);
+
+ALTER materialized view vente_vm
+ADD CONSTRAINT pk_view_vente_lieu_fk Foreign KEY (code_postal, ville) references lieu_vm;
+
+ALTER materialized view vente_vm
+ADD CONSTRAINT pk_view_vente_client_fk Foreign KEY (num_client) references client_vm;
+
+ALTER materialized view vente_vm
+ADD CONSTRAINT pk_view_vente_temps_fk Foreign KEY (date_vente) references temps_vm;
+
+ALTER materialized view vente_vm
+ADD CONSTRAINT pk_view_vente_produit_fk Foreign KEY (num_produit) references produit_vm;
+
+Creation des index bitmap : 
+
+CREATE BITMAP INDEX IX_produit_categorie
+ON produit_vm (categorie);
+
+CREATE BITMAP INDEX IX_produit_sscategorie
+ON produit_vm (sous_categorie);
+
+CREATE BITMAP INDEX IX_client_tranche
+ON client_vm (tranche_age);
+
+CREATE BITMAP INDEX IX_temps_annee
+ON temps_vm (annee);
+
+Déclaration des dimensions
+
+CREATE DIMENSION produits_dim
+LEVEL produit IS(produit_vm.num)
+LEVEL sous_categorie IS (produit_vm.sous_categorie) SKIP WHEN NULL
+LEVEL categorie IS (produit_vm.categorie)
+HIERARCHY prod_rollup (
+produit CHILD OF sous_categorie
+CHILD OF categorie);
+
+
+
+
+
